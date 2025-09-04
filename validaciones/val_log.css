@@ -1,0 +1,13 @@
+.input-ok {
+            border: 2px solid green !important;
+            background-color: #eaffea;
+        }
+        .input-error {
+            border: 2px solid red !important;
+            background-color: #ffeaea;
+        }
+        .error {
+            color: red;
+            font-size: 14px;
+            margin-top: 5px;
+        }

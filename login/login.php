@@ -1,13 +1,14 @@
 <?php
 session_start();
 if (isset($_SESSION['usuario_id'])) {
-    header("Location: dashboard.php");
+    header("Location: ../administrador/dashboard.php");
     exit;
 }
 ?>
 
 <!DOCTYPE html>
 <html lang="es">
+
 <head>
     <meta charset="UTF-8">
     <title>Login</title>
@@ -18,6 +19,22 @@ if (isset($_SESSION['usuario_id'])) {
         button { width: 100%; padding: 10px; background: #007BFF; border: none; color: #fff; font-weight: bold; border-radius: 5px; cursor: pointer; }
         button:hover { background: #0056b3; }
         .error { color: red; margin: 10px 0; }
+
+        
+        .input-ok {
+            border: 2px solid green !important;
+            background-color: #eaffea;
+        }
+        .input-error {
+            border: 2px solid red !important;
+            background-color: #ffeaea;
+        }
+        .error {
+            color: red;
+            font-size: 14px;
+            margin-top: 5px;
+        }
+
     </style>
 </head>
 <body>
@@ -36,28 +53,6 @@ if (isset($_SESSION['usuario_id'])) {
     <div id="mensajeError" class="error"></div>
 </div>
 
-<script>
-document.getElementById("loginForm").addEventListener("submit", function(event) {
-    let email = document.getElementById("email").value.trim();
-    let password = document.getElementById("password").value.trim();
-    let mensajeError = document.getElementById("mensajeError");
-    mensajeError.innerHTML = "";
-
-    // Validar email básico
-    let regexEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!regexEmail.test(email)) {
-        mensajeError.innerHTML = "Por favor, ingresa un correo válido.";
-        event.preventDefault();
-        return;
-    }
-
-    // Validar longitud de la contraseña
-    if (password.length < 6) {
-        mensajeError.innerHTML = "La contraseña debe tener al menos 6 caracteres.";
-        event.preventDefault();
-        return;
-    }
-});
-</script>
+<script src="../validaciones/val_login.js"></script>
 </body>
 </html>

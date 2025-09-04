@@ -1,6 +1,6 @@
 <?php
 session_start();
-require 'db.php'; 
+require '../bd/db.php'; 
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     $email = trim($_POST["email"]);
@@ -23,7 +23,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $_SESSION["usuario_nombre"] = $usuario["nombre"];
             $_SESSION["usuario_rol"] = $usuario["rol_id"];
 
-            header("Location: dashboard.php");
+            header("Location: ../administrador/dashboard.php");
             exit;
         } else {
             $_SESSION["error"] = "Contraseña incorrecta.";
@@ -37,3 +37,5 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 }
 ?>
+
+
