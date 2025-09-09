@@ -1,0 +1,7 @@
+{
+    "require": {
+        "google/apiclient": "2.15",
+        "guzzlehttp/guzzle": "7.5",
+        "google/auth": "1.30"
+    }
+}
