@@ -1,0 +1,9 @@
+/vendor/
+node_modules/
+
+/.env
+*.env
+flotax-map-3949a96314d9.json
+
+.DS_Store
+Thumbs.db

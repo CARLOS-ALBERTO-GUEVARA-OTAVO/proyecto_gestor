@@ -35,70 +35,55 @@ function log_action($conn, $action, $fileId, $fileName, $details = '') {
     $stmt->close();
 }
 
+/**
+ * Obtiene la ruta completa de una carpeta (breadcrumb) de forma recursiva.
+ * Utiliza una caché para evitar llamadas repetidas a la API para la misma carpeta.
+ * @param Google_Service_Drive $service El objeto de servicio de Drive.
+ * @param string $folderId El ID de la carpeta desde la que empezar.
+ * @param string $rootFolderId El ID de la carpeta raíz para detener la recursión.
+ * @param array &$cache Array pasado por referencia para almacenar en caché las rutas ya calculadas.
+ * @return string La ruta completa, ej: "Carpeta A / Carpeta B / Carpeta C".
+ */
+function getFolderPath(Google_Service_Drive $service, $folderId, $rootFolderId, &$cache) {
+    // Si ya calculamos esta ruta, la devolvemos desde la caché.
+    if (isset($cache[$folderId])) {
+        return $cache[$folderId];
+    }
+
+    // Si llegamos a la carpeta raíz, detenemos la recursión.
+    if ($folderId === $rootFolderId) {
+        // Opcionalmente, podrías querer el nombre de la carpeta raíz aquí.
+        // $rootFolder = $service->files->get($rootFolderId, ['fields' => 'name']);
+        // return $rootFolder->getName();
+        return ''; // Devolvemos vacío para no mostrar "Carpeta Raíz / Subcarpeta..."
+    }
+
+    try {
+        $folder = $service->files->get($folderId, ['fields' => 'name, parents']);
+        $path = htmlspecialchars($folder->getName());
+
+        if (!empty($folder->getParents())) {
+            $parentId = $folder->getParents()[0];
+            $parentPath = getFolderPath($service, $parentId, $rootFolderId, $cache);
+            $path = ($parentPath ? $parentPath . ' / ' : '') . $path;
+        }
+        $cache[$folderId] = $path; // Guardamos el resultado en la caché.
+        return $path;
+    } catch (Exception $e) {
+        return '<i>Ruta no accesible</i>'; // Si no hay permisos para una carpeta intermedia.
+    }
+}
+
 // --- Database Connection ---
 $conn = new mysqli('localhost', 'root', '123456', 'proyecto_gestion', '3309');
 
 // Establecemos que la respuesta será en formato JSON
 header('Content-Type: application/json');
 
-// --- Handle POST requests (e.g., delete) ---
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    if ($conn->connect_error) {
-        http_response_code(500);
-        echo json_encode(['status' => 'error', 'message' => '❌ Error de conexión a la base de datos.']);
-        exit;
-    }
+$searchQuery = filter_input(INPUT_GET, 'q', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
 
-    $input = json_decode(file_get_contents('php://input'), true);
-    $action = $input['action'] ?? null;
-    $fileId = $input['fileId'] ?? null;
-
-    // --- Security Check ---
-    // Solo usuarios logueados pueden eliminar. ¡Podrías añadir más checks, ej. por rol!
-    if (!isset($_SESSION['usuario_id'])) {
-        http_response_code(403); // Forbidden
-        echo json_encode(['status' => 'error', 'message' => '❌ No tienes permiso para realizar esta acción. Inicia sesión.']);
-        exit;
-    }
-
-    if ($action === 'delete' && $fileId) {
-        $fileName = 'Desconocido'; // Valor por defecto por si falla la obtención del nombre
-        try {
-            putenv('GOOGLE_APPLICATION_CREDENTIALS=' . __DIR__ . '/flotax-map-3949a96314d9.json');
-            $client = new Google_Client();
-            $client->setAuthConfig(__DIR__ . '/flotax-map-3949a96314d9.json');
-            $client->addScope(Google_Service_Drive::DRIVE);
-            $token = $client->fetchAccessTokenWithAssertion();
-            if (isset($token['error'])) {
-                throw new Exception('Error al autenticar con Google: ' . $token['error_description']);
-            }
-            $service = new Google_Service_Drive($client);
-
-            $fileToDelete = $service->files->get($fileId, ['fields' => 'name']);
-            $fileName = $fileToDelete->getName();
-
-            // Movemos el archivo a la papelera
-            $service->files->update($fileId, new Google_Service_Drive_DriveFile(['trashed' => true]));
-
-            if ($conn->ping()) log_action($conn, 'movido a papelera', $fileId, $fileName);
-
-            echo json_encode(['status' => 'success', 'message' => "✅ Archivo '" . htmlspecialchars($fileName) . "' movido a la papelera."]);
-        } catch (Exception $e) {
-            http_response_code(500);
-            $friendlyError = parseGoogleException($e, 'delete');
-            // Registramos el error detallado en el historial
-            if ($conn->ping()) log_action($conn, 'error al eliminar', $fileId, $fileName, $friendlyError);
-            echo json_encode(['status' => 'error', 'message' => '❌ Error al eliminar: ' . $friendlyError]);
-        }
-        $conn->close();
-        exit;
-    }
-    
-    http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'Acción no válida.']);
-    $conn->close();
-    exit;
-}
+// ID de la carpeta raíz. Se define aquí para que esté disponible tanto para la búsqueda como para el listado.
+$defaultFolderId = "1w1X74_EI9LDVhkTrrgA89etnvofGhYSN";
 
 // --- Handle GET requests (list files) ---
 $response = [
@@ -128,12 +113,84 @@ try {
     // 2. Inicializar servicio de Drive
     $service = new Google_Service_Drive($client);
 
+    // --- LÓGICA DE BÚSQUEDA ---
+    if ($searchQuery) {
+        $response['folderName'] = "Resultados de la búsqueda";
+
+        // Parámetros para buscar archivos por nombre
+        $optParams = [
+            'q' => sprintf("name contains '%s' and trashed = false", addslashes($searchQuery)),
+            'pageSize' => 25, // Aumentamos un poco el límite para búsquedas
+            'fields' => 'files(id, name, iconLink, webViewLink, mimeType, parents, createdTime, modifiedTime)' // Pedimos los parents
+        ];
+
+        $results = $service->files->listFiles($optParams);
+        $archivos = $results->getFiles();
+
+        // Caché para las rutas de las carpetas, para no repetir llamadas a la API
+        $folderPathCache = [];
+
+        $fileListHtml = '';
+        if (empty($archivos)) {
+            $fileListHtml = "<p class='no-files'>No se encontraron archivos que coincidan con '<strong>" . htmlspecialchars($searchQuery) . "</strong>'.</p>";
+        } else {
+            $fileListHtml .= '<ul class="file-list search-results">';
+            foreach ($archivos as $file) {
+                // Para la búsqueda, no mostraremos carpetas en los resultados, solo archivos.
+                if ($file->getMimeType() === 'application/vnd.google-apps.folder') {
+                    continue;
+                }
+
+                $fullPath = 'Ubicación desconocida';
+                $parentLink = '#';
+                $parentDataAttribute = '';
+
+                // Obtenemos el nombre de la carpeta padre (si tiene una)
+                if (!empty($file->getParents())) {
+                    $parentId = $file->getParents()[0];
+                    // Usamos la nueva función para obtener la ruta completa
+                    $fullPath = getFolderPath($service, $parentId, $defaultFolderId, $folderPathCache);
+                    if (empty($fullPath)) $fullPath = 'Carpeta Principal'; // Si está en la raíz
+
+                    $parentLink = sprintf('?folderId=%s', htmlspecialchars($parentId));
+                    $parentDataAttribute = sprintf('data-folderid="%s"', htmlspecialchars($parentId));
+                }
+
+                $fileListHtml .= sprintf(
+                    '<li class="file-item">' .
+                        '<a href="%s" target="_blank" rel="noopener noreferrer"><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>' .
+                        '<div class="file-location">' .
+                            '<span>En carpeta: <a href="%s" %s>%s</a></span>' .
+                        '</div>' .
+                    '</li>',
+                    htmlspecialchars($file->getWebViewLink()),
+                    htmlspecialchars($file->getIconLink()),
+                    htmlspecialchars($file->getName()),
+                    $parentLink,
+                    $parentDataAttribute,
+                    $fullPath
+                );
+            }
+            $fileListHtml .= '</ul>';
+        }
+        $response['status'] = 'success';
+        $response['fileListHtml'] = $fileListHtml;
+        $response['message'] = '✅ Búsqueda completada.';
+        echo json_encode($response);
+        $conn->close();
+        exit; // Terminamos el script aquí para no ejecutar la lógica de listar carpetas.
+    }
+
     // 3. Obtener información de la carpeta y archivos
-    $defaultFolderId = "1w1X74_EI9LDVhkTrrgA89etnvofGhYSN";
-    $folderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: $defaultFolderId;
+    $folderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: $defaultFolderId; // Usa el ID de la URL o el por defecto.
 
     $folder = $service->files->get($folderId, ['fields' => 'name, parents']);
     $response['folderName'] = $folder->getName();
+
+    // Registramos la acción de visualización de la carpeta en el historial si hay un usuario logueado.
+    if ($conn->ping() && isset($_SESSION['usuario_id'])) {
+        log_action($conn, 'vista de carpeta', $folderId, $folder->getName());
+    }
 
     // Generamos un enlace para "Volver" si no estamos en la carpeta raíz
     if ($folderId !== $defaultFolderId && !empty($folder->getParents())) {
@@ -150,7 +207,7 @@ try {
     $optParams = [
         'q' => sprintf("'%s' in parents and trashed = false", $folderId),
         'pageSize' => 20,
-        'fields' => 'files(id, name, iconLink, webViewLink, mimeType)'
+        'fields' => 'files(id, name, iconLink, webViewLink, mimeType, createdTime, modifiedTime)'
     ];
 
     $results = $service->files->listFiles($optParams);
@@ -167,15 +224,20 @@ try {
             $fileId = $file->getId();
             $fileNameEscaped = htmlspecialchars($file->getName());
 
-            // El botón de eliminar solo se muestra si hay una sesión de usuario activa.
-            $deleteButton = '';
-            if (isset($_SESSION['usuario_id'])) {
-                $deleteButton = sprintf(
-                    '<button class="delete-btn" data-fileid="%s" data-filename="%s" title="Mover a la papelera">🗑️</button>',
-                    htmlspecialchars($fileId),
-                    $fileNameEscaped
-                );
-            }
+            // --- Formateo de Fechas con Zona Horaria ---
+            // La API de Google devuelve fechas en formato UTC (ej: 2023-10-27T10:00:00.000Z).
+            // Para mostrarlas correctamente en la hora local del usuario, hacemos una conversión.
+            // ¡IMPORTANTE! Cambia 'America/Bogota' a tu zona horaria.
+            // Lista de zonas horarias: https://www.php.net/manual/es/timezones.php
+            $local_tz = new DateTimeZone('America/Bogota');
+
+            $createdDate = new DateTime($file->getCreatedTime());
+            $createdDate->setTimezone($local_tz);
+            $formattedCreated = $createdDate->format('d/m/Y H:i');
+
+            $modifiedDate = new DateTime($file->getModifiedTime());
+            $modifiedDate->setTimezone($local_tz);
+            $formattedModified = $modifiedDate->format('d/m/Y H:i');
             
             if ($isFolder) {
                 // Si es una CARPETA, preparamos el enlace para AJAX
@@ -190,13 +252,20 @@ try {
             }
             
             $fileListHtml .= sprintf(
-                '<li class="file-item"><a href="%s" %s %s><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>%s</li>',
+                '<li class="file-item">' .
+                    '<a href="%s" %s %s><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>' .
+                    '<div class="file-dates">' .
+                        '<span class="date-modified" title="Última modificación">Modificado: %s</span>' .
+                        '<span class="date-created" title="Fecha de creación">Creado: %s</span>' .
+                    '</div>' .
+                '</li>',
                 $link,
                 $target,
                 $dataAttribute,
                 htmlspecialchars($file->getIconLink()),
                 $fileNameEscaped,
-                $deleteButton
+                $formattedModified,
+                $formattedCreated
             );
         }
         $fileListHtml .= '</ul>';
@@ -204,7 +273,7 @@ try {
     
     $response['status'] = 'success';
     $response['fileListHtml'] = $fileListHtml;
-    $response['message'] = '✅ Conexión establecida con Google Drive.';
+    $response['message'] = '✅ Carpeta cargada correctamente.';
 
 } catch (Exception $e) {
     $response['message'] = "❌ Error: " . parseGoogleException($e, 'view');
