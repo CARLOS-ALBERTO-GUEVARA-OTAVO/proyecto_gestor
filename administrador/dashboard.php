@@ -175,26 +175,34 @@ if (isset($_GET['action']) && $_GET['action'] == 'generate_report') {
 // Manejo de acciones CRUD
 if ($_SERVER['REQUEST_METHOD'] == 'POST') {
     $id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
-    $nombre = $conn->real_escape_string($_POST['nombre']);
-    $email = $conn->real_escape_string($_POST['email']);
-    $password = !empty($_POST['password']) ? password_hash($_POST['password'], PASSWORD_DEFAULT) : null;
+    $nombre = $_POST['nombre'];
+    $email = $_POST['email'];
     $rol_id = (int)$_POST['rol_id'];
     $estado_id = (int)$_POST['estado'];
     $cargo_id = (int)$_POST['cargo_id'];
 
     if (isset($_GET['action']) && $_GET['action'] == 'save') {
-        $sql = "INSERT INTO usuarios (nombre, email, password_hash, rol_id, estado_id, cargo_id) 
-                VALUES ('$nombre', '$email', '$password', $rol_id, $estado_id, $cargo_id)";
-        $conn->query($sql);
+        // La contraseña es obligatoria al crear
+        $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+        $stmt = $conn->prepare("INSERT INTO usuarios (nombre, email, password_hash, rol_id, estado_id, cargo_id) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param("sssiis", $nombre, $email, $password, $rol_id, $estado_id, $cargo_id);
+        $stmt->execute();
+        $stmt->close();
         header("Location: dashboard.php");
         exit();
     } elseif (isset($_GET['action']) && $_GET['action'] == 'update') {
-        $sql = "UPDATE usuarios SET nombre='$nombre', email='$email', rol_id=$rol_id, estado_id=$estado_id, cargo_id=$cargo_id";
-        if ($password) {
-            $sql .= ", password_hash='$password'";
+        if (!empty($_POST['password'])) {
+            // Si se proporciona una nueva contraseña, la actualizamos
+            $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+            $stmt = $conn->prepare("UPDATE usuarios SET nombre=?, email=?, rol_id=?, estado_id=?, cargo_id=?, password_hash=? WHERE id=?");
+            $stmt->bind_param("ssiiisi", $nombre, $email, $rol_id, $estado_id, $cargo_id, $password, $id);
+        } else {
+            // Si no, actualizamos todo excepto la contraseña
+            $stmt = $conn->prepare("UPDATE usuarios SET nombre=?, email=?, rol_id=?, estado_id=?, cargo_id=? WHERE id=?");
+            $stmt->bind_param("ssiiii", $nombre, $email, $rol_id, $estado_id, $cargo_id, $id);
         }
-        $sql .= " WHERE id=$id";
-        $conn->query($sql);
+        $stmt->execute();
+        $stmt->close();
         header("Location: dashboard.php");
         exit();
     }
@@ -202,7 +210,11 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST') {
 
 if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id'])) {
     $id = (int)$_GET['id'];
-    $conn->query("DELETE FROM usuarios WHERE id=$id");
+    // También usar consultas preparadas para eliminar
+    $stmt = $conn->prepare("DELETE FROM usuarios WHERE id = ?");
+    $stmt->bind_param("i", $id);
+    $stmt->execute();
+    $stmt->close();
     header("Location: dashboard.php");
     exit();
 }

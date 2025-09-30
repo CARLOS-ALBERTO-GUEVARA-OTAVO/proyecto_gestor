@@ -48,7 +48,7 @@ if (isset($_SESSION['usuario_id'])) {
             max-width: 400px;
             width: 90%;
             padding: 40px;
-            background: rgba(255, 255, 255, 0.9); /* Un poco más opaco para mejorar legibilidad */
+            background: rgba(255, 255, 255, 0.9); /* Un poco más opaco para mejorar legibilidad */ 
             backdrop-filter: blur(10px);
             border-radius: 12px;
             box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
@@ -120,6 +120,15 @@ if (isset($_SESSION['usuario_id'])) {
             border: 1px solid rgba(220, 53, 69, 0.2);
             border-radius: 8px;
         }
+
+        .contact-info {
+            margin-top: 24px;
+            font-size: 0.875rem; /* 14px */
+            color: #4a5568; /* Un gris oscuro para buena legibilidad */
+            line-height: 1.5;
+            border-top: 1px solid #e2e8f0; /* Separador sutil */
+            padding-top: 16px;
+        }
     </style>
 </head>
 <body>
@@ -140,6 +149,11 @@ if (isset($_SESSION['usuario_id'])) {
         <div id="mensajeError" class="error" style="display: none;"></div>
         <button type="submit">Iniciar Sesión</button>
     </form>
+
+    <div class="contact-info">
+        <p style="margin: 0;">¿Olvidaste tus credenciales? <br>Por favor, contacta al <strong>Líder Gestión del Conocimiento y TICS</strong> para recibir asistencia.</p>
+    </div>
+
 </div>
 
 <script src="../validaciones/val_login.js"></script>
