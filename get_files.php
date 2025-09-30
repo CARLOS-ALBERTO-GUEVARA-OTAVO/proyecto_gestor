@@ -42,40 +42,49 @@ function log_action($conn, $action, $fileId, $fileName, $details = '') {
  * @param string $folderId El ID de la carpeta desde la que empezar.
  * @param string $rootFolderId El ID de la carpeta raíz para detener la recursión.
  * @param array &$cache Array pasado por referencia para almacenar en caché las rutas ya calculadas.
- * @return string La ruta completa, ej: "Carpeta A / Carpeta B / Carpeta C".
+ * @return array Un array de fragmentos de ruta, cada uno con 'id', 'name'.
  */
-function getFolderPath(Google_Service_Drive $service, $folderId, $rootFolderId, &$cache) {
+function getFolderPathRecursive(Google_Service_Drive $service, $folderId, $rootFolderId, &$cache) {
     // Si ya calculamos esta ruta, la devolvemos desde la caché.
     if (isset($cache[$folderId])) {
         return $cache[$folderId];
     }
 
-    // Si llegamos a la carpeta raíz, detenemos la recursión.
+    // Si llegamos a la carpeta raíz (o por encima de ella), detenemos la recursión.
     if ($folderId === $rootFolderId) {
-        // Opcionalmente, podrías querer el nombre de la carpeta raíz aquí.
-        // $rootFolder = $service->files->get($rootFolderId, ['fields' => 'name']);
-        // return $rootFolder->getName();
-        return ''; // Devolvemos vacío para no mostrar "Carpeta Raíz / Subcarpeta..."
+        return [];
     }
 
     try {
-        $folder = $service->files->get($folderId, ['fields' => 'name, parents']);
-        $path = htmlspecialchars($folder->getName());
+        $folder = $service->files->get($folderId, ['fields' => 'id, name, parents']);
+        $path = [];
 
+        // Recursivamente obtenemos la ruta del padre.
         if (!empty($folder->getParents())) {
             $parentId = $folder->getParents()[0];
-            $parentPath = getFolderPath($service, $parentId, $rootFolderId, $cache);
-            $path = ($parentPath ? $parentPath . ' / ' : '') . $path;
+            // Si el padre no es la carpeta raíz, continuamos la recursión.
+            if ($parentId !== $rootFolderId) {
+                 $path = getFolderPathRecursive($service, $parentId, $rootFolderId, $cache);
+            }
         }
+
+        // Añadimos la carpeta actual al final de la ruta.
+        $path[] = [
+            'id' => $folder->getId(),
+            'name' => $folder->getName()
+        ];
+
         $cache[$folderId] = $path; // Guardamos el resultado en la caché.
         return $path;
+
     } catch (Exception $e) {
-        return '<i>Ruta no accesible</i>'; // Si no hay permisos para una carpeta intermedia.
+        // Si no hay permisos para una carpeta intermedia, devolvemos un marcador.
+        return [['id' => null, 'name' => 'Ruta no accesible']];
     }
 }
 
 // --- Database Connection ---
-$conn = new mysqli('localhost', 'root', '123456', 'proyecto_gestion', '3309');
+$conn = new mysqli('localhost', 'root', '', 'proyecto_gestion', '3306');
 
 // Establecemos que la respuesta será en formato JSON
 header('Content-Type: application/json');
@@ -91,7 +100,7 @@ $response = [
     'message' => 'Ocurrió un error desconocido.',
     'folderName' => 'Google Drive',
     'fileListHtml' => '',
-    'backLinkHtml' => ''
+    'breadcrumbHtml' => ''
 ];
 
 try {
@@ -141,34 +150,54 @@ try {
                     continue;
                 }
 
-                $fullPath = 'Ubicación desconocida';
-                $parentLink = '#';
-                $parentDataAttribute = '';
+                // --- Formateo de Fechas con Zona Horaria (igual que en la vista de carpeta) ---
+                // ¡IMPORTANTE! Cambia 'America/Bogota' a tu zona horaria si es diferente.
+                $local_tz = new DateTimeZone('America/Bogota');
 
-                // Obtenemos el nombre de la carpeta padre (si tiene una)
+                $createdDate = new DateTime($file->getCreatedTime());
+                $createdDate->setTimezone($local_tz);
+                $formattedCreated = $createdDate->format('d/m/Y H:i');
+
+                $modifiedDate = new DateTime($file->getModifiedTime());
+                $modifiedDate->setTimezone($local_tz);
+                $formattedModified = $modifiedDate->format('d/m/Y H:i');
+
+
+                $fullPath = 'Ubicación desconocida';                
+
+                // Obtenemos la ruta completa de la carpeta padre (si tiene una)
                 if (!empty($file->getParents())) {
                     $parentId = $file->getParents()[0];
-                    // Usamos la nueva función para obtener la ruta completa
-                    $fullPath = getFolderPath($service, $parentId, $defaultFolderId, $folderPathCache);
-                    if (empty($fullPath)) $fullPath = 'Carpeta Principal'; // Si está en la raíz
-
-                    $parentLink = sprintf('?folderId=%s', htmlspecialchars($parentId));
-                    $parentDataAttribute = sprintf('data-folderid="%s"', htmlspecialchars($parentId));
+                    // getFolderPathRecursive devuelve un array de partes de la ruta
+                    $pathParts = getFolderPathRecursive($service, $parentId, $defaultFolderId, $folderPathCache);
+                    
+                    if (empty($pathParts)) {
+                        // Si la ruta está vacía, el archivo está en la carpeta raíz.
+                        // Creamos un enlace a la carpeta raíz.
+                        $fullPath = sprintf(
+                            '<a href="?folderId=%s" data-folderid="%s">Carpeta Principal</a>',
+                            htmlspecialchars($defaultFolderId),
+                            htmlspecialchars($defaultFolderId)
+                        );
+                    } else {
+                        $fullPath = implode(' / ', array_map(fn($part) => sprintf('<a href="?folderId=%s" data-folderid="%s">%s</a>', htmlspecialchars($part['id']), htmlspecialchars($part['id']), htmlspecialchars($part['name'])), $pathParts)
+                        );
+                    }
                 }
 
                 $fileListHtml .= sprintf(
                     '<li class="file-item">' .
-                        '<a href="%s" target="_blank" rel="noopener noreferrer"><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>' .
-                        '<div class="file-location">' .
-                            '<span>En carpeta: <a href="%s" %s>%s</a></span>' .
+                        '<a href="%s" target="_blank" rel="noopener noreferrer"><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>'.
+                        '<div class="file-dates">' .
+                            '<div class="file-location"><span>En carpeta:</span> %s</div>' .
+                            '<span class="date-modified" title="Última modificación">Modificado: %s</span>' .
                         '</div>' .
                     '</li>',
                     htmlspecialchars($file->getWebViewLink()),
                     htmlspecialchars($file->getIconLink()),
                     htmlspecialchars($file->getName()),
-                    $parentLink,
-                    $parentDataAttribute,
-                    $fullPath
+                    $fullPath, // Ruta de la carpeta
+                    $formattedModified // Fecha de modificación
                 );
             }
             $fileListHtml .= '</ul>';
@@ -192,16 +221,32 @@ try {
         log_action($conn, 'vista de carpeta', $folderId, $folder->getName());
     }
 
-    // Generamos un enlace para "Volver" si no estamos en la carpeta raíz
-    if ($folderId !== $defaultFolderId && !empty($folder->getParents())) {
-        $parentFolderId = $folder->getParents()[0];
-        // Añadimos un atributo data-folderid para que JavaScript lo pueda identificar
-        $response['backLinkHtml'] = sprintf(
-            '<a href="?folderId=%s" class="back-link" data-folderid="%s">← Volver a la carpeta anterior</a>',
-            htmlspecialchars($parentFolderId),
-            htmlspecialchars($parentFolderId)
-        );
+    // --- Generación de la ruta de navegación (Breadcrumbs) ---
+    $breadcrumbHtml = sprintf('<a href="?folderId=%s" data-folderid="%s">Carpeta Principal</a>', htmlspecialchars($defaultFolderId), htmlspecialchars($defaultFolderId));
+    $breadcrumbCache = [];
+
+    if ($folderId !== $defaultFolderId) {
+        $pathParts = getFolderPathRecursive($service, $folderId, $defaultFolderId, $breadcrumbCache);
+        
+        foreach ($pathParts as $index => $part) {
+            $breadcrumbHtml .= '<span class="separator">/</span>';
+            $isLast = $index === count($pathParts) - 1;
+
+            if ($isLast) {
+                // El último elemento es la carpeta actual, no es un enlace.
+                $breadcrumbHtml .= sprintf('<span class="current-folder">%s</span>', htmlspecialchars($part['name']));
+            } else {
+                // Los elementos intermedios son enlaces.
+                $breadcrumbHtml .= sprintf(
+                    '<a href="?folderId=%s" data-folderid="%s">%s</a>',
+                    htmlspecialchars($part['id']),
+                    htmlspecialchars($part['id']),
+                    htmlspecialchars($part['name'])
+                );
+            }
+        }
     }
+    $response['breadcrumbHtml'] = $breadcrumbHtml;
 
     // Parámetros para listar archivos
     $optParams = [
@@ -272,7 +317,7 @@ try {
     }
     
     $response['status'] = 'success';
-    $response['fileListHtml'] = $fileListHtml;
+    $response['fileListHtml'] = $fileListHtml; // Ya se asignó antes
     $response['message'] = '✅ Carpeta cargada correctamente.';
 
 } catch (Exception $e) {
