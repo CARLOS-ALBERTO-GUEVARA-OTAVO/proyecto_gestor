@@ -1,11 +1,21 @@
+# Dependencias de Composer
 /vendor/
-node_modules/
+composer.lock
 
-/.env
+# Dependencias de Node
+/node_modules/
+package-lock.json
+
+# Archivos de entorno
+.env
 *.env
 flotax-map-3949a96314d9.json
 
+# Archivos del sistema
 .DS_Store
 Thumbs.db
 
-*.json
+# Logs y temporales
+*.log
+*.cache
+*.tmp
