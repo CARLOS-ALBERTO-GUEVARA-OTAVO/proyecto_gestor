@@ -14,7 +14,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     try {
         // 1. Buscamos al usuario por su email y traemos la información de su estado.
-        $sql = "SELECT u.id, u.nombre, u.password_hash, u.rol_id, u.estado_id, es.estado, es.descripcion, r.nombre as rol_nombre, c.nombre as cargo_nombre
+        $sql = "SELECT u.id, u.nombre, u.password_hash, u.rol_id, u.cargo_id, u.estado_id, es.estado, es.descripcion, r.nombre as rol_nombre, c.nombre as cargo_nombre
                 FROM usuarios u
                 JOIN estados_usuario es ON u.estado_id = es.id
                 LEFT JOIN roles r ON u.rol_id = r.id
@@ -34,6 +34,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['usuario_rol_id'] = $user['rol_id'];
                 $_SESSION['usuario_rol_nombre'] = $user['rol_nombre'];
                 $_SESSION['usuario_cargo_nombre'] = $user['cargo_nombre'];
+                $_SESSION['usuario_cargo_id'] = $user['cargo_id']; // Guardamos el ID del cargo
+
+                // --- NUEVO: Cargar permisos de carpetas (AJUSTADO) ---
+                // Los roles con acceso total (ej. Gerente, Ing. Sistemas) no necesitan buscar permisos.
+                $roles_con_acceso_total = [1, 3]; // IDs de Gerente General e Ingeniero de Sistemas
+                // Para los demás cargos, buscamos sus carpetas permitidas.
+                if (!in_array($user['rol_id'], $roles_con_acceso_total)) {
+                    $sql_permisos = "SELECT folder_id FROM rol_permisos_carpetas WHERE cargo_id = ?";
+                    $stmt_permisos = $pdo->prepare($sql_permisos);
+                    $stmt_permisos->execute([$user['cargo_id']]);
+                    
+                    // Obtenemos directamente los IDs de las carpetas.
+                    // Esto asume que la columna 'folder_id' contiene el ID y no la URL completa.
+                    $_SESSION['allowed_folders'] = $stmt_permisos->fetchAll(PDO::FETCH_COLUMN, 0);
+                }
+                // --- FIN NUEVO ---
 
                 // Redirigir según el rol del usuario
                 if ($user['rol_id'] == 1) { // Rol de Administrador

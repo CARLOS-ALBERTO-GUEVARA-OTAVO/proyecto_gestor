@@ -1,5 +1,51 @@
 <?php
 session_start();
+
+/**
+ * Manejador de errores personalizado para asegurar respuestas JSON.
+ * Captura errores de PHP (warnings, notices) que no son excepciones
+ * y los convierte en una respuesta JSON de error coherente.
+ */
+set_error_handler(function ($severity, $message, $file, $line) {
+    // Ignorar errores si error_reporting está desactivado
+    if (!(error_reporting() & $severity)) {
+        return false;
+    }
+
+    // Limpiamos cualquier salida que se haya podido generar antes del error.
+    if (ob_get_level() > 0) {
+        ob_end_clean();
+    }
+
+    http_response_code(500); // Internal Server Error
+    header('Content-Type: application/json');
+    echo json_encode([
+        'status' => 'error',
+        'message' => "Error interno del servidor en $file en la línea $line: $message",
+        'fileListHtml' => '<p class="no-files">Ocurrió un error inesperado en el servidor. Contacta al administrador.</p>'
+    ]);
+    exit; // Detenemos la ejecución para no enviar más datos.
+});
+
+/**
+ * Manejador de cierre para capturar errores fatales (como Parse Errors).
+ * Esto asegura que si el script muere inesperadamente, todavía intentará
+ * enviar una respuesta JSON válida en lugar de HTML de error.
+ */
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error && ($error['type'] === E_ERROR || $error['type'] === E_PARSE)) {
+        if (ob_get_level() > 0) { ob_end_clean(); }
+        http_response_code(500);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Error fatal del servidor: ' . $error['message'] . " en " . $error['file'] . " línea " . $error['line'],
+            'fileListHtml' => '<p class="no-files">Ocurrió un error fatal en el servidor. Contacta al administrador.</p>'
+        ]);
+    }
+});
+
 require __DIR__ . '/vendor/autoload.php';
 
 /**
@@ -83,6 +129,41 @@ function getFolderPathRecursive(Google_Service_Drive $service, $folderId, $rootF
     }
 }
 
+/**
+ * Verifica si un usuario tiene permiso para acceder a una carpeta específica.
+ * Lo hace de forma recursiva, subiendo por el árbol de directorios de Drive
+ * hasta encontrar una de las carpetas base permitidas para el usuario.
+ *
+ * @param Google_Service_Drive $service El objeto de servicio de Drive.
+ * @param string $folderId El ID de la carpeta que se quiere verificar.
+ * @param array $allowedRootFolders La lista de IDs de las carpetas raíz permitidas para el usuario.
+ * @param array &$cache Caché para evitar llamadas repetidas a la API.
+ * @return bool True si la carpeta es permitida, false en caso contrario.
+ */
+function isFolderAllowed(Google_Service_Drive $service, $folderId, array $allowedRootFolders, &$cache) {
+    // Si la carpeta actual es una de las raíces permitidas, el acceso es válido.
+    if (in_array($folderId, $allowedRootFolders)) {
+        return true;
+    }
+
+    // Usamos la caché para no volver a verificar una carpeta ya procesada.
+    if (isset($cache[$folderId])) {
+        return $cache[$folderId];
+    }
+
+    try {
+        $folder = $service->files->get($folderId, ['fields' => 'parents']);
+        if (!empty($folder->getParents())) {
+            $parentId = $folder->getParents()[0];
+            // Llamada recursiva para verificar el padre. El resultado se guarda en caché.
+            return $cache[$folderId] = isFolderAllowed($service, $parentId, $allowedRootFolders, $cache);
+        }
+    } catch (Exception $e) {
+        // Si hay un error (ej. carpeta no encontrada), se deniega el acceso.
+    }
+    return $cache[$folderId] = false;
+}
+
 // --- Database Connection ---
 $conn = new mysqli('localhost', 'root', '', 'proyecto_gestion', '3306');
 
@@ -91,10 +172,19 @@ header('Content-Type: application/json');
 
 $searchQuery = filter_input(INPUT_GET, 'q', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
 
-// ID de la carpeta raíz. Se define aquí para que esté disponible tanto para la búsqueda como para el listado.
+// ID de la carpeta raíz para el Administrador.
 $defaultFolderId = "1w1X74_EI9LDVhkTrrgA89etnvofGhYSN";
 
-// --- Handle GET requests (list files) ---
+// --- LÓGICA DE PERMISOS ---
+// Solo el rol de Administrador (ID 1) tiene acceso total. Los demás se basan en su cargo.
+$roles_con_acceso_total = [1];
+$is_admin_role = isset($_SESSION['usuario_rol_id']) && in_array($_SESSION['usuario_rol_id'], $roles_con_acceso_total);
+
+$allowed_folders = $_SESSION['allowed_folders'] ?? [];
+
+// La carpeta raíz para este usuario. Si es admin, la general. Si no, la primera de su lista.
+$userRootFolderId = $is_admin_role ? $defaultFolderId : ($allowed_folders[0] ?? null);
+
 $response = [
     'status' => 'error',
     'message' => 'Ocurrió un error desconocido.',
@@ -109,8 +199,8 @@ try {
         $response['message'] = '⚠️ Advertencia: No se pudo conectar a la base de datos para el historial.';
     }
     // 1. Configuración y autenticación del cliente
-    putenv('GOOGLE_APPLICATION_CREDENTIALS=' . __DIR__ . '/flotax-map-3949a96314d9.json');
     $client = new Google_Client();
+    // setAuthConfig es el método recomendado y suficiente para cargar las credenciales.
     $client->setAuthConfig(__DIR__ . '/flotax-map-3949a96314d9.json');
     $client->addScope(Google_Service_Drive::DRIVE);
 
@@ -126,9 +216,27 @@ try {
     if ($searchQuery) {
         $response['folderName'] = "Resultados de la búsqueda";
 
+        // ¡CORRECCIÓN! Si el usuario no es admin y no tiene carpetas, no puede buscar.
+        if (!$is_admin_role && empty($allowed_folders)) {
+            throw new Exception("No tienes permiso para buscar archivos porque no tienes carpetas asignadas.");
+        }
+
+
+        // --- RESTRICCIÓN DE BÚSQUEDA POR PERMISOS ---
+        $searchScopeQuery = "";
+        if (!$is_admin_role) {
+            if (empty($allowed_folders)) {
+                throw new Exception("No tienes permiso para buscar archivos.");
+            }
+            $parentQueries = array_map(function($id) {
+                return sprintf("'%s' in parents", addslashes($id));
+            }, $allowed_folders);
+            $searchScopeQuery = ' and (' . implode(' or ', $parentQueries) . ')';
+        }
+
         // Parámetros para buscar archivos por nombre
         $optParams = [
-            'q' => sprintf("name contains '%s' and trashed = false", addslashes($searchQuery)),
+            'q' => sprintf("name contains '%s' and trashed = false %s", addslashes($searchQuery), $searchScopeQuery),
             'pageSize' => 25, // Aumentamos un poco el límite para búsquedas
             'fields' => 'files(id, name, iconLink, webViewLink, mimeType, parents, createdTime, modifiedTime)' // Pedimos los parents
         ];
@@ -168,20 +276,32 @@ try {
                 // Obtenemos la ruta completa de la carpeta padre (si tiene una)
                 if (!empty($file->getParents())) {
                     $parentId = $file->getParents()[0];
-                    // getFolderPathRecursive devuelve un array de partes de la ruta
-                    $pathParts = getFolderPathRecursive($service, $parentId, $defaultFolderId, $folderPathCache);
+                    // Usamos la carpeta raíz del usuario como tope para la recursión.
+                    // ¡CORRECCIÓN CRÍTICA! Si el usuario no es admin, $userRootFolderId puede ser null.
+                    // Para la búsqueda, siempre necesitamos un ID de tope válido. Usaremos el defaultFolderId
+                    // si el específico del usuario no está disponible. Esto no da más permisos, solo evita un error fatal.
+                    $pathParts = getFolderPathRecursive($service, $parentId, $userRootFolderId ?: $defaultFolderId, $folderPathCache);
                     
                     if (empty($pathParts)) {
                         // Si la ruta está vacía, el archivo está en la carpeta raíz.
                         // Creamos un enlace a la carpeta raíz.
-                        $fullPath = sprintf(
+                        $fullPath = $is_admin_role ? sprintf(
                             '<a href="?folderId=%s" data-folderid="%s">Carpeta Principal</a>',
                             htmlspecialchars($defaultFolderId),
                             htmlspecialchars($defaultFolderId)
-                        );
+                        ) : '';
                     } else {
-                        $fullPath = implode(' / ', array_map(fn($part) => sprintf('<a href="?folderId=%s" data-folderid="%s">%s</a>', htmlspecialchars($part['id']), htmlspecialchars($part['id']), htmlspecialchars($part['name'])), $pathParts)
-                        );
+                        $fullPath = implode(' / ', array_map(
+                            function($part) {
+                                return sprintf(
+                                    '<a href="?folderId=%s" data-folderid="%s">%s</a>',
+                                    htmlspecialchars($part['id']),
+                                    htmlspecialchars($part['id']),
+                                    htmlspecialchars($part['name'])
+                                );
+                            },
+                            $pathParts
+                        ));
                     }
                 }
 
@@ -210,43 +330,68 @@ try {
         exit; // Terminamos el script aquí para no ejecutar la lógica de listar carpetas.
     }
 
-    // 3. Obtener información de la carpeta y archivos
-    $folderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: $defaultFolderId; // Usa el ID de la URL o el por defecto.
+    // --- LÓGICA DE LISTADO DE CARPETAS ---
+    $folderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS);
+
+    // Si no se especifica un folderId, mostramos las carpetas raíz del usuario.
+    if (!$folderId) {
+        if ($is_admin_role) {
+            $folderId = $defaultFolderId; // El admin ve la carpeta raíz por defecto.
+        } else {
+            if (empty($allowed_folders)) {
+                 $response['status'] = 'success';
+                 $response['message'] = 'No tienes carpetas asignadas.';
+                 $response['folderName'] = 'Mis Carpetas';
+                 $response['fileListHtml'] = "<p class='no-files'>No tienes acceso a ninguna carpeta. Contacta al administrador.</p>";
+                 $response['breadcrumbHtml'] = '<span>Mis Carpetas</span>';
+                 echo json_encode($response);
+                 $conn->close();
+                 exit;
+            }
+            // Para usuarios no-admin, la "raíz" es una lista de sus carpetas permitidas.
+            $response['status'] = 'success';
+            $response['message'] = 'Mostrando tus carpetas asignadas.';
+            $response['folderName'] = 'Mis Carpetas';
+            $response['breadcrumbHtml'] = '<span class="current-folder">Mis Carpetas</span>';
+            
+            $fileListHtml = '<ul class="file-list">';
+            foreach ($allowed_folders as $allowed_folder_id) {
+                try {
+                    $folder_info = $service->files->get($allowed_folder_id, ['fields' => 'id, name, iconLink']);
+                    $fileListHtml .= sprintf(
+                        '<li class="file-item">' .
+                            '<a href="?folderId=%s" data-folderid="%s"><img src="%s" alt="icon" class="file-icon"> <span>%s</span></a>' .
+                        '</li>',
+                        htmlspecialchars($folder_info->getId()),
+                        htmlspecialchars($folder_info->getId()),
+                        htmlspecialchars($folder_info->getIconLink()),
+                        htmlspecialchars($folder_info->getName())
+                    );
+                } catch (Exception $e) {
+                    // Si una carpeta asignada no existe o no hay permisos, se omite.
+                }
+            }
+            $fileListHtml .= '</ul>';
+            $response['fileListHtml'] = $fileListHtml;
+            echo json_encode($response);
+            $conn->close();
+            exit;
+        }
+    }
+
+    // --- VALIDACIÓN DE PERMISOS PARA LA CARPETA SOLICITITADA ---
+    if (!$is_admin_role) {
+        // ¡NUEVA VALIDACIÓN ROBUSTA!
+        // Usamos nuestra nueva función para verificar si la carpeta solicitada ($folderId)
+        // es una de las carpetas raíz del usuario O una subcarpeta de alguna de ellas.
+        $permissionCache = [];
+        if (!isFolderAllowed($service, $folderId, $allowed_folders, $permissionCache)) {
+            throw new Exception("Acceso denegado a esta carpeta.");
+        }
+    }
 
     $folder = $service->files->get($folderId, ['fields' => 'name, parents']);
     $response['folderName'] = $folder->getName();
-
-    // Registramos la acción de visualización de la carpeta en el historial si hay un usuario logueado.
-    if ($conn->ping() && isset($_SESSION['usuario_id'])) {
-        log_action($conn, 'vista de carpeta', $folderId, $folder->getName());
-    }
-
-    // --- Generación de la ruta de navegación (Breadcrumbs) ---
-    $breadcrumbHtml = sprintf('<a href="?folderId=%s" data-folderid="%s">Carpeta Principal</a>', htmlspecialchars($defaultFolderId), htmlspecialchars($defaultFolderId));
-    $breadcrumbCache = [];
-
-    if ($folderId !== $defaultFolderId) {
-        $pathParts = getFolderPathRecursive($service, $folderId, $defaultFolderId, $breadcrumbCache);
-        
-        foreach ($pathParts as $index => $part) {
-            $breadcrumbHtml .= '<span class="separator">/</span>';
-            $isLast = $index === count($pathParts) - 1;
-
-            if ($isLast) {
-                // El último elemento es la carpeta actual, no es un enlace.
-                $breadcrumbHtml .= sprintf('<span class="current-folder">%s</span>', htmlspecialchars($part['name']));
-            } else {
-                // Los elementos intermedios son enlaces.
-                $breadcrumbHtml .= sprintf(
-                    '<a href="?folderId=%s" data-folderid="%s">%s</a>',
-                    htmlspecialchars($part['id']),
-                    htmlspecialchars($part['id']),
-                    htmlspecialchars($part['name'])
-                );
-            }
-        }
-    }
-    $response['breadcrumbHtml'] = $breadcrumbHtml;
 
     // Parámetros para listar archivos
     $optParams = [
@@ -257,6 +402,54 @@ try {
 
     $results = $service->files->listFiles($optParams);
     $archivos = $results->getFiles();
+
+    // Registramos la acción de visualización de la carpeta en el historial solo si hay un usuario logueado.
+    if (isset($_SESSION['usuario_id']) && $conn->ping()) {
+        log_action($conn, 'vista de carpeta', $folderId, $folder->getName());
+    }
+
+    // --- Generación de la ruta de navegación (Breadcrumbs) ---
+    $breadcrumbHtml = '<a href="?folderId=" data-folderid="">Mis Carpetas</a>'; // Enlace a la raíz del usuario
+    $breadcrumbCache = [];
+
+    // La ruta solo se muestra si estamos dentro de una de las carpetas permitidas.
+    // Para usuarios no-admin, la recursión se detiene en CUALQUIERA de sus carpetas raíz asignadas.
+    // Si la carpeta actual no es descendiente de ninguna, la ruta estará vacía.
+    $rootForPath = $is_admin_role ? $defaultFolderId : null;
+
+    $pathParts = [];
+    if ($is_admin_role) {
+        $pathParts = getFolderPathRecursive($service, $folderId, $rootForPath, $breadcrumbCache);
+    } else {
+        // Para usuarios no-admin, buscamos la ruta desde la carpeta actual hasta una de sus carpetas raíz.
+        foreach ($allowed_folders as $user_root) {
+            $tempPath = getFolderPathRecursive($service, $folderId, $user_root, $breadcrumbCache);
+            // Si encontramos una ruta válida (no está vacía y no contiene error), la usamos.
+            if (!empty($tempPath) && $tempPath[0]['id'] !== null) {
+                // Añadimos la carpeta raíz del usuario al inicio de la ruta para que sea visible
+                $root_folder_info = $service->files->get($user_root, ['fields' => 'id, name']);
+                array_unshift($tempPath, ['id' => $root_folder_info->getId(), 'name' => $root_folder_info->getName()]);
+                $pathParts = $tempPath;
+                break;
+            }
+        }
+    }
+    
+    // Si la carpeta actual es una de las raíces del usuario, no mostramos la ruta completa, solo su nombre.
+    if (in_array($folderId, $allowed_folders) && !$is_admin_role) {
+        $breadcrumbHtml .= sprintf('<span class="separator">/</span><span class="current-folder">%s</span>', htmlspecialchars($folder->getName()));
+    } else { // Para subcarpetas o para el admin
+        foreach (($pathParts ?? []) as $index => $part) {
+            $breadcrumbHtml .= '<span class="separator">/</span>';
+            $isLast = $index === count($pathParts) - 1;
+            if ($isLast) {
+                $breadcrumbHtml .= sprintf('<span class="current-folder">%s</span>', htmlspecialchars($part['name']));
+            } else {
+                $breadcrumbHtml .= sprintf('<a href="?folderId=%s" data-folderid="%s">%s</a>', htmlspecialchars($part['id']), htmlspecialchars($part['id']), htmlspecialchars($part['name']));
+            }
+        }
+    }
+    $response['breadcrumbHtml'] = $breadcrumbHtml;
 
     // 4. Generar HTML para la lista de archivos
     $fileListHtml = '';
@@ -328,3 +521,21 @@ try {
 // Devolvemos la respuesta completa como un objeto JSON
 echo json_encode($response);
 $conn->close();
+
+// Al final de get_files.php, antes de cualquier echo o salida
+register_shutdown_function(function () {
+    $error = error_get_last();
+    if ($error && ($error['type'] === E_ERROR || $error['type'] === E_PARSE)) {
+        if (ob_get_level() > 0) {
+            ob_end_clean();
+        }
+        http_response_code(500);
+        header('Content-Type: application/json');
+        echo json_encode([
+            'status' => 'error',
+            'message' => 'Error fatal: ' . $error['message'],
+            'fileListHtml' => '<p class="no-files">Ocurrió un error fatal en el servidor. Contacta al administrador.</p>'
+        ]);
+        exit;
+    }
+});

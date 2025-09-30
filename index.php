@@ -10,6 +10,10 @@ if (!isset($_SESSION['usuario_id'])) {
 // Esto permite que los enlaces directos a carpetas específicas sigan funcionando.
 $defaultFolderId = "1w1X74_EI9LDVhkTrrgA89etnvofGhYSN";
 $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?: $defaultFolderId;
+// Si se pasa un folderId en la URL, se usará. Si no, se deja vacío para que el backend decida.
+// Esto permite que los enlaces directos a carpetas específicas sigan funcionando (si el usuario tiene permiso).
+$initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPECIAL_CHARS) ?? '';
+
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -370,7 +374,7 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
 
             try {
                 // Se añade un parámetro `_` con la fecha actual para evitar que el navegador cachee la respuesta.
-                const response = await fetch(`get_files.php?folderId=${folderId}&_=${new Date().getTime()}`);
+                const response = await fetch(`get_files.php?folderId=${folderId || ''}&_=${new Date().getTime()}`);
                 if (!response.ok) {
                     throw new Error(`Error de red: ${response.status}`);
                 }
@@ -378,13 +382,15 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
 
                 // Actualiza la UI con los datos recibidos
                 folderTitle.textContent = 'Visor de Archivos'; // Título más genérico
+                if (data.folderName) { folderTitle.textContent = data.folderName; }
+
                 showStatusMessage(data.message, data.status);
 
                 breadcrumbContainer.innerHTML = data.breadcrumbHtml;
                 fileListContainer.innerHTML = data.fileListHtml;
                 
                 // Actualiza la URL en la barra de direcciones para soportar historial y recarga
-                const url = new URL(window.location);
+                const url = new URL(window.location.href.split('?')[0]); // URL base sin parámetros
                 url.searchParams.set('folderId', folderId);
                 window.history.pushState({path: url.href}, '', url.href);
 
@@ -445,10 +451,7 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
             if (query) {
                 searchFiles(query);
             } else {
-                // Si la búsqueda está vacía, volvemos a cargar la carpeta que estaba visible o la principal
-                const urlParams = new URLSearchParams(window.location.search);
-                const currentFolderId = urlParams.get('folderId') || defaultFolderId;
-                loadFolder(defaultFolderId);
+                loadFolder(''); // Cargar la vista raíz del usuario
             }
         }
 
@@ -467,9 +470,9 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
 
         // Maneja los botones de atrás/adelante del navegador
         window.addEventListener('popstate', function(event) {
-            const url = new URL(window.location);
-            const folderId = url.searchParams.get('folderId') || defaultFolderId;
-            loadFolder(folderId);
+            const url = new URL(window.location.href);
+            const folderId = url.searchParams.get('folderId');
+            loadFolder(folderId || '');
         });
 
         // Función para escapar HTML y prevenir ataques XSS
