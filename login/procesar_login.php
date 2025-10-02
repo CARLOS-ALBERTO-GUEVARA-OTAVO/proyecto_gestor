@@ -37,17 +37,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $_SESSION['usuario_cargo_id'] = $user['cargo_id']; // Guardamos el ID del cargo
 
                 // --- NUEVO: Cargar permisos de carpetas (AJUSTADO) ---
-                // Los roles con acceso total (ej. Gerente, Ing. Sistemas) no necesitan buscar permisos.
-                $roles_con_acceso_total = [1, 3]; // IDs de Gerente General e Ingeniero de Sistemas
-                // Para los demás cargos, buscamos sus carpetas permitidas.
-                if (!in_array($user['rol_id'], $roles_con_acceso_total)) {
+                // Solo el rol de Administrador (ID 1) tiene acceso total por defecto.
+                // Para TODOS los demás cargos, buscamos sus carpetas permitidas en la base de datos.
+                $es_admin = ($user['rol_id'] == 1);
+                if (!$es_admin && !empty($user['cargo_id'])) {
                     $sql_permisos = "SELECT folder_id FROM rol_permisos_carpetas WHERE cargo_id = ?";
                     $stmt_permisos = $pdo->prepare($sql_permisos);
                     $stmt_permisos->execute([$user['cargo_id']]);
                     
                     // Obtenemos directamente los IDs de las carpetas.
                     // Esto asume que la columna 'folder_id' contiene el ID y no la URL completa.
-                    $_SESSION['allowed_folders'] = $stmt_permisos->fetchAll(PDO::FETCH_COLUMN, 0);
+                    $folder_ids_from_db = $stmt_permisos->fetchAll(PDO::FETCH_COLUMN, 0);
+
+                    // Hacemos el sistema más robusto: si se pegó una URL completa, extraemos el ID.
+                    $_SESSION['allowed_folders'] = array_map(function($item) {
+                        if (filter_var($item, FILTER_VALIDATE_URL)) {
+                            // Si es una URL, tomamos la última parte, que debería ser el ID.
+                            return basename($item);
+                        }
+                        return $item; // Si no es una URL, asumimos que ya es el ID.
+                    }, $folder_ids_from_db);
+                } else {
+                    $_SESSION['allowed_folders'] = []; // Aseguramos que la variable exista, aunque esté vacía para el admin.
                 }
                 // --- FIN NUEVO ---
 

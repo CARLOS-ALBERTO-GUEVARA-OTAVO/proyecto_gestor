@@ -85,16 +85,23 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
         }
 
         .container {
-            max-width: 960px;
+            /* Aumentamos el ancho máximo para aprovechar mejor las pantallas grandes */
+            max-width: 1200px; 
             margin: 20px auto;
             padding: 0 15px;
         }
 
         .card {
+            /* La tarjeta ahora ocupará el 100% del ancho de su contenedor padre */
+            width: 100%; 
             background-color: var(--color-surface);
             border-radius: 8px;
             box-shadow: var(--shadow-md);
             overflow: hidden;
+        }
+
+        .card-wrapper {
+            display: flex; /* Usamos flexbox para centrar la tarjeta fácilmente */
         }
 
         .header {
@@ -309,22 +316,24 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
         </div>
     </div>
 
-    <div class="container card">
-        <header class="header">
-            <div class="header-top">
-                <h1 id="folder-title">Cargando...</h1>
-                <form id="search-form" class="search-form">
-                    <input type="search" id="search-input" placeholder="Buscar archivos..." class="search-input">
-                    <button type="submit" class="search-button">Buscar</button>
-                </form>
-            </div>
-            <p id="status-message" class="status" style="display: none;"></p>
-        </header>
-        
-        <main>
-            <div id="breadcrumb-container"></div>
-            <div id="file-list-container">
-                <p class="no-files">Cargando archivos...</p>
+    <div class="container">
+        <div class="card">
+            <header class="header">
+                <div class="header-top">
+                    <h1 id="folder-title">Cargando...</h1>
+                    <form id="search-form" class="search-form">
+                        <input type="search" id="search-input" placeholder="Buscar archivos..." class="search-input">
+                        <button type="submit" class="search-button">Buscar</button>
+                    </form>
+                </div>
+                <p id="status-message" class="status" style="display: none;"></p>
+            </header>
+            
+            <main>
+                <div id="breadcrumb-container"></div>
+                <div id="file-list-container">
+                    <p class="no-files">Cargando archivos...</p>
+                </div>
             </div>
             <div class="footer-actions">
                 <a href="login/logout.php" class="logout-link">Cerrar sesión 🔒</a>

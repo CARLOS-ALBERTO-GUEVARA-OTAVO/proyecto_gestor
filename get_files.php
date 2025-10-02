@@ -221,28 +221,25 @@ try {
             throw new Exception("No tienes permiso para buscar archivos porque no tienes carpetas asignadas.");
         }
 
-
-        // --- RESTRICCIÓN DE BÚSQUEDA POR PERMISOS ---
-        $searchScopeQuery = "";
-        if (!$is_admin_role) {
-            if (empty($allowed_folders)) {
-                throw new Exception("No tienes permiso para buscar archivos.");
-            }
-            $parentQueries = array_map(function($id) {
-                return sprintf("'%s' in parents", addslashes($id));
-            }, $allowed_folders);
-            $searchScopeQuery = ' and (' . implode(' or ', $parentQueries) . ')';
-        }
+        // --- ESTRATEGIA DE BÚSQUEDA CORREGIDA (RECURSIVA) ---
+        // 1. Buscamos por nombre en todo el Drive.
+        // 2. Luego, filtraremos los resultados para mostrar solo aquellos
+        //    a los que el usuario tiene permiso (si no es admin).
+        $searchScopeQuery = $is_admin_role ? "" : sprintf(" and '%s' in parents", $defaultFolderId);
 
         // Parámetros para buscar archivos por nombre
         $optParams = [
-            'q' => sprintf("name contains '%s' and trashed = false %s", addslashes($searchQuery), $searchScopeQuery),
+            // La consulta ahora es más simple. El filtrado se hace después.
+            'q' => sprintf("name contains '%s' and trashed = false", addslashes($searchQuery)),
             'pageSize' => 25, // Aumentamos un poco el límite para búsquedas
             'fields' => 'files(id, name, iconLink, webViewLink, mimeType, parents, createdTime, modifiedTime)' // Pedimos los parents
         ];
 
         $results = $service->files->listFiles($optParams);
         $archivos = $results->getFiles();
+
+        // Caché para la validación de permisos, para no repetir llamadas a la API.
+        $permissionCache = [];
 
         // Caché para las rutas de las carpetas, para no repetir llamadas a la API
         $folderPathCache = [];
@@ -256,6 +253,15 @@ try {
                 // Para la búsqueda, no mostraremos carpetas en los resultados, solo archivos.
                 if ($file->getMimeType() === 'application/vnd.google-apps.folder') {
                     continue;
+                }
+
+                // --- 2. FILTRADO POR PERMISOS (LA PARTE CLAVE) ---
+                // Si no es admin, verificamos si el archivo está en una carpeta permitida.
+                if (!$is_admin_role) {
+                    $parentId = $file->getParents()[0] ?? null;
+                    if (!$parentId || !isFolderAllowed($service, $parentId, $allowed_folders, $permissionCache)) {
+                        continue; // Si no tiene padre o no está permitido, saltamos al siguiente archivo.
+                    }
                 }
 
                 // --- Formateo de Fechas con Zona Horaria (igual que en la vista de carpeta) ---
