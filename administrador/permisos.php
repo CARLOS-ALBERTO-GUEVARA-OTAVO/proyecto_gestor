@@ -41,6 +41,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['action']) && $_POST['action'] == 'add_permission') {
         $cargo_id = (int)$_POST['cargo_id'];
         $folder_id = trim($_POST['folder_id']);
+        $descripcion = trim($_POST['descripcion'] ?? ''); // Campo opcional
 
         if (!empty($cargo_id) && !empty($folder_id)) {
             // Verificamos si el permiso ya existe para no duplicarlo
@@ -52,8 +53,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $checkStmt->close();
 
             if ($count == 0) {
-                $stmt = $conn->prepare("INSERT INTO rol_permisos_carpetas (cargo_id, folder_id) VALUES (?, ?)");
-                $stmt->bind_param("is", $cargo_id, $folder_id);
+                $stmt = $conn->prepare("INSERT INTO rol_permisos_carpetas (cargo_id, folder_id, descripcion) VALUES (?, ?, ?)");
+                $stmt->bind_param("iss", $cargo_id, $folder_id, $descripcion);
                 if ($stmt->execute()) {
                     $feedback = ['message' => 'Permiso agregado correctamente.', 'type' => 'success'];
                 } else {
@@ -117,10 +118,13 @@ while ($cargo = $result_cargos->fetch_assoc()) {
     ];
 }
 
-$result_permisos = $conn->query("SELECT cargo_id, folder_id FROM rol_permisos_carpetas");
+$result_permisos = $conn->query("SELECT cargo_id, folder_id, descripcion FROM rol_permisos_carpetas");
 while ($permiso = $result_permisos->fetch_assoc()) {
     if (isset($cargos_con_permisos[$permiso['cargo_id']])) {
-        $cargos_con_permisos[$permiso['cargo_id']]['permisos'][] = $permiso['folder_id'];
+        $cargos_con_permisos[$permiso['cargo_id']]['permisos'][] = [
+            'folder_id' => $permiso['folder_id'],
+            'descripcion' => $permiso['descripcion']
+        ];
     }
 }
 
@@ -168,7 +172,7 @@ while ($permiso = $result_permisos->fetch_assoc()) {
                     <?php echo htmlspecialchars($feedback['message']); ?>
                 </div>
             <?php endif; ?>
-            <form method="POST" action="permisos.php" class="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+            <form method="POST" action="permisos.php" class="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                 <input type="hidden" name="action" value="add_permission">
                 <div>
                     <label for="cargo_id" class="block text-sm font-medium text-gray-700">Cargo</label>
@@ -182,6 +186,10 @@ while ($permiso = $result_permisos->fetch_assoc()) {
                 <div>
                     <label for="folder_id" class="block text-sm font-medium text-gray-700">ID de la Carpeta de Google Drive</label>
                     <input type="text" name="folder_id" id="folder_id" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500" placeholder="Ej: 1w1X74_EI9LDVhkTrrgA89etnvofGhYSN" required>
+                </div>
+                <div>
+                    <label for="descripcion" class="block text-sm font-medium text-gray-700">Descripción (Opcional)</label>
+                    <input type="text" name="descripcion" id="descripcion" class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-green-500 focus:border-green-500" placeholder="Ej: Documentos Contables 2024">
                 </div>
                 <button type="submit" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition w-full md:w-auto"><i class="fas fa-plus mr-2"></i> Asignar Permiso</button>
             </form>
@@ -199,16 +207,21 @@ while ($permiso = $result_permisos->fetch_assoc()) {
                             <p class="text-gray-500 italic">Este cargo no tiene carpetas asignadas.</p>
                         <?php else: ?>
                             <ul class="space-y-2">
-                                <?php foreach ($cargo['permisos'] as $folder_id): ?>
+                                <?php foreach ($cargo['permisos'] as $permiso): ?>
                                     <li class="flex justify-between items-center p-2 rounded-md hover:bg-gray-50">
                                         <div>
-                                            <span class="font-mono text-sm text-blue-600"><?php echo htmlspecialchars($folder_id); ?></span>
-                                            <span class="text-gray-600 ml-2">(<?php echo htmlspecialchars(getFolderName($service, $folder_id, $folderNameCache)); ?>)</span>
+                                            <span class="font-mono text-sm text-blue-600"><?php echo htmlspecialchars($permiso['folder_id']); ?></span>
+                                            <span class="text-gray-600 ml-2">(<?php echo htmlspecialchars(getFolderName($service, $permiso['folder_id'], $folderNameCache)); ?>)</span>
+                                            <?php if (!empty($permiso['descripcion'])): ?>
+                                                <p class="text-sm text-gray-500 mt-1 pl-1 border-l-2 border-gray-200">
+                                                    <i class="fas fa-info-circle mr-1"></i> <?php echo htmlspecialchars($permiso['descripcion']); ?>
+                                                </p>
+                                            <?php endif; ?>
                                         </div>
                                         <form method="POST" action="permisos.php" onsubmit="return confirm('¿Estás seguro de que quieres eliminar este permiso?');">
                                             <input type="hidden" name="action" value="delete_permission">
                                             <input type="hidden" name="cargo_id" value="<?php echo $id_cargo; ?>">
-                                            <input type="hidden" name="folder_id" value="<?php echo htmlspecialchars($folder_id); ?>">
+                                            <input type="hidden" name="folder_id" value="<?php echo htmlspecialchars($permiso['folder_id']); ?>">
                                             <button type="submit" class="text-red-500 hover:text-red-700 text-sm">
                                                 <i class="fas fa-trash-alt mr-1"></i> Quitar
                                             </button>

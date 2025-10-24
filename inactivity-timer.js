@@ -12,7 +12,7 @@ function InactivityTimer(options) {
     const config = {
         // Tiempo total de inactividad en milisegundos.
         // El usuario pidió 1 minuto (60,000 ms). Puedes cambiarlo a 5 minutos (300,000 ms).
-        timeout: options.timeout || 60000,
+        timeout: options.timeout || 300000,
         // Tiempo en milisegundos antes del timeout para mostrar la advertencia.
         warningTime: options.warningTime || 10000,
         // URL a la que se redirige al expirar el tiempo.
