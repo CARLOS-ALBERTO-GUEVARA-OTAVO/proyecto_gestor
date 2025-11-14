@@ -148,12 +148,19 @@ if (isset($_SESSION['usuario_id'])) {
         </div>
         <div id="mensajeError" class="error" style="display: none;"></div>
         <button type="submit">Iniciar Sesión</button>
-    </form>
+    </form> <!-- El formulario termina aquí -->
 
+    <!-- Movemos la información de contacto fuera del formulario -->
     <div class="contact-info">
-        <p style="margin: 0;">¿Olvidaste tus credenciales? <br>Por favor, contacta al <strong>Líder Gestión del Conocimiento y TICS</strong> para recibir asistencia.</p>
+        <p style="margin-bottom: 10px;">
+            ¿Olvidaste tus credenciales? Contacta al <strong>Líder de Gestión del Conocimiento y TICS</strong>.
+        </p>
+        <a href="https://mail.google.com/mail/?view=cm&fs=1&to=aprendiz.gct@biofix.com.co&su=Reporte+de+Problema+-+Gestor+Documental&body=Descripción%20del%20problema:%0A%0A"
+           target="_blank" 
+           style="display: inline-block; padding: 8px 12px; background-color: #6c757d; color: white; text-decoration: none; border-radius: 6px; font-size: 0.9rem;">
+            Reportar un Problema
+        </a>
     </div>
-
 </div>
 
 <script src="../validaciones/val_login.js"></script>

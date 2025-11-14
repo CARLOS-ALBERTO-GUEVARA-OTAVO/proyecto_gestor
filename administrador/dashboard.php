@@ -282,7 +282,6 @@ if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id']))
     <div class="container mx-auto mt-6 p-6 bg-white rounded-lg shadow-xl">
         <div class="flex justify-between items-center mb-4">
             <h4 class="text-2xl font-semibold text-green-600"><i class="fas fa-users mr-2"></i> Gestión de Usuarios</h4>
-            <a href="?action=add" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition"><i class="fas fa-plus mr-2"></i> Agregar Usuario</a>
             <div>
                 <a href="permisos.php" class="bg-purple-500 text-white px-4 py-2 rounded-lg hover:bg-purple-600 transition mr-2"><i class="fas fa-key mr-2"></i> Gestionar Permisos</a>
                 <a href="?action=add" class="bg-green-500 text-white px-4 py-2 rounded-lg hover:bg-green-600 transition"><i class="fas fa-plus mr-2"></i> Agregar Usuario</a>
@@ -414,7 +413,12 @@ if (isset($_GET['action']) && $_GET['action'] == 'delete' && isset($_GET['id']))
     </div>
 
     <div class="container mx-auto mt-4">
-        <a href="../login/logout.php" class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition">
+        <a href="https://mail.google.com/mail/?view=cm&fs=1&to=aprendiz.gct@biofix.com.co&su=Reporte+de+Problema+-+Gestor+Documental+(Admin)&body=Usuario:%20<?php echo urlencode(htmlspecialchars($_SESSION['usuario_nombre'])); ?>%20(ID:%20<?php echo $_SESSION['usuario_id']; ?>)%0A%0ADescripción%20del%20problema:%0A%0A" 
+           target="_blank" 
+           class="bg-gray-500 text-white px-4 py-2 rounded-lg hover:bg-gray-600 transition inline-flex items-center">
+            <i class="fas fa-bug mr-2"></i> Reportar Problema
+        </a>
+        <a href="../login/logout.php" class="bg-red-500 text-white px-4 py-2 rounded-lg hover:bg-red-600 transition ml-2">
             <i class="fas fa-sign-out-alt mr-2"></i> Cerrar sesión
         </a>
     </div>

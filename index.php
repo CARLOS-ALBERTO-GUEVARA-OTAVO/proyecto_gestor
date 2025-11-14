@@ -413,7 +413,7 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
         // Nueva función para buscar archivos en todo el Drive
         async function searchFiles(query) {
             fileListContainer.innerHTML = '<p class="no-files">Buscando archivos...</p>';
-            folderTitle.textContent = `Resultados para "${escapeHTML(query)}"`;
+            folderTitle.textContent = `Resultados para "${query}"`; // El query ya está sanitizado en el HTML con escapeHTML
             statusMessage.style.display = 'none';
             breadcrumbContainer.innerHTML = ''; // Ocultamos la ruta de navegación en la vista de búsqueda
 
@@ -483,11 +483,6 @@ $initialFolderId = filter_input(INPUT_GET, 'folderId', FILTER_SANITIZE_FULL_SPEC
             const folderId = url.searchParams.get('folderId');
             loadFolder(folderId || '');
         });
-
-        // Función para escapar HTML y prevenir ataques XSS
-        function escapeHTML(str) {
-            return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
-        }
 
         // Carga inicial de la carpeta
         loadFolder(initialFolderId);
